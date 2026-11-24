@@ -27,32 +27,42 @@ window.fightNet={async join(room,slot,receive){await auth.authStateReady();const
 
 
 // Casual multiplayer: host controls rounds; no ranked rewards.
+
 let quizClose=null;
 const quizQuestions=qs;
+const heroes=[{name:'공정관리자',hp:100,atk:12,skill:'공정 폭주',power:25,look:{'의상':'mint','무기':'pad'}},{name:'미생물 연구원',hp:90,atk:15,skill:'대장균군 검출',power:30,look:{'의상':'lab','무기':'drop'}},{name:'품질보증 전문가',hp:120,atk:10,skill:'품질 방어',power:-30,look:{'의상':'black','무기':'log'}}];
+function quizResolve(v,key){const ps=Object.values(v.players||{}),alive=ps.filter(p=>p.hp>0);for(const p of alive){const damage=alive.reduce((n,a)=>n+(a!==p&&a.answers?.[v.round]===key?heroes[a.hero].atk:0),0);p.hp=Math.max(0,p.hp-damage);if(p.answers?.[v.round]===key)p.score=(p.score||0)+1}v.round++;if(ps.filter(p=>p.hp>0).length<=1||v.round>=quizQuestions.length)v.finished=true;return v}
 function quizUI(mode){
  if(quizClose){quizClose();quizClose=null}
- const root=panel;root.innerHTML='<button data-back="1">← 이전 화면</button><h2>실시간 퀴즈 배틀</h2><input id="qn" maxlength="16" placeholder="닉네임"><input id="qr" maxlength="6" placeholder="방 코드"><button id="qgo">'+(mode==='create'?'방 생성':'참가')+'</button><div id="qbody" class="quizstage"></div>';
- const body=root.querySelector('#qbody'),go=root.querySelector('#qgo');
+ const root=panel;root.innerHTML='<button data-back="1">← 이전 화면</button><h2>3인 서바이벌</h2><input id="qn" maxlength="16" placeholder="닉네임"><input id="qr" maxlength="6" placeholder="방 코드"><div id="heroPick" class="heroPick"></div><button id="qgo">'+(mode==='create'?'방 생성':'참가')+'</button><div id="qbody" class="quizstage"></div>';
+ const body=root.querySelector('#qbody'),go=root.querySelector('#qgo');let hero=0,equip={};try{const s=JSON.parse(localStorage.getItem('hcShopV1')||'{}');for(const k of ['무기','보조무기','의상','머리','악세서리'])if(typeof s.equip?.[k]==='string'&&s.owned?.includes(s.equip[k]))equip[k]=s.equip[k]}catch{}
+ const pick=root.querySelector('#heroPick');heroes.forEach((h,i)=>{const b=document.createElement('button');b.className=i===0?'chosen':'';b.innerHTML=window.quizAvatarMarkup({...h.look,...equip})+'<strong>'+h.name+'</strong><small>HP '+h.hp+' / ATK '+h.atk+'</small><small>'+h.skill+'</small>';b.onclick=()=>{hero=i;Array.from(pick.children).forEach((x,j)=>x.classList.toggle('chosen',j===i))};pick.append(b)});
+ if(mode==='create')root.querySelector('#qr').hidden=true;
  go.onclick=async()=>{go.disabled=true;try{
  await auth.authStateReady();const uid=(auth.currentUser||(await signInAnonymously(auth)).user).uid;
- const name=root.querySelector('#qn').value.trim()||'플레이어';let equip={};try{const s=JSON.parse(localStorage.getItem('hcShopV1')||'{}');for(const k of ['무기','보조무기','의상','머리','악세서리'])if(typeof s.equip?.[k]==='string'&&s.owned?.includes(s.equip[k]))equip[k]=s.equip[k]}catch{}
+ const name=root.querySelector('#qn').value.trim()||'플레이어';
  const room=mode==='create'?Array.from(crypto.getRandomValues(new Uint8Array(6)),v=>'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[v%32]).join(''):root.querySelector('#qr').value.trim().toUpperCase();
  if(!/^[A-Z0-9]{6}$/.test(room))throw Error('방 코드 6자 입력');
- const base=ref(realtime,'quizRooms/'+room), own=ref(realtime,'quizRooms/'+room+'/players/'+uid);
- if(mode==='create')await set(base,{host:uid,round:-1,players:{[uid]:{name,equip}}});
- else {const snap=await get(base);if(!snap.exists()||snap.val().round!==-1)throw Error('참가 가능한 방이 아닙니다');await set(own,{name,equip});}
- await onDisconnect(own).remove();
- let current=null;
- const off=onValue(base,snap=>{if(!body.isConnected)return;const v=snap.val();if(!v){body.textContent='방 종료';return}current=v;body.replaceChildren();const title=document.createElement('h3');title.className='quizcode';title.textContent=room+' · '+Object.keys(v.players||{}).length+'/10';body.append(title);
- const list=document.createElement('div');list.className='quizslots';const people=Object.values(v.players||{});for(let i=0;i<10;i++){const slot=document.createElement('div');slot.className='quizslot';const avatar=document.createElement('i');if(people[i]){avatar.innerHTML=window.quizAvatarMarkup(people[i].equip||{});const answered=people[i].answers?.[v.round]!==undefined;if(v.round>=0&&answered)slot.classList.add('quizanswered');}else avatar.textContent='＋';slot.append(avatar,people[i]?.name||'대기');list.append(slot)}body.append(list);
- function btn(label,fn,target=body){const b=document.createElement('button');b.textContent=label;b.onclick=async()=>{b.disabled=true;try{await fn()}catch(e){b.disabled=false;alert(e.message)}};target.append(b)}
- if(v.round===-1){if(uid===v.host)btn('게임 시작',()=>update(base,{round:0}));return}
- if(v.round>=quizQuestions.length){const scores=Object.entries(v.players||{}).map(([id,p])=>({name:p.name,score:quizQuestions.reduce((n,q,i)=>n+(p.answers?.[i]===q[2]?1:0),0)})).sort((a,b)=>b.score-a.score);scores.forEach((p,i)=>{const row=document.createElement('p');row.className='quizrank';row.textContent=(i+1)+'위 '+p.name+' · '+p.score+'점';body.append(row)});return}
- const q=quizQuestions[v.round],h=document.createElement('h3');h.textContent=(v.round+1)+'. '+q[0];body.append(h);const progress=document.createElement('div');progress.className='quizprogress';const bar=document.createElement('span');bar.style.width=((v.round+1)/quizQuestions.length*100)+'%';progress.append(bar);body.append(progress);const answers=document.createElement('div');answers.className='quizanswers';body.append(answers);
- if(v.players?.[uid]?.answers?.[v.round]===undefined)q[1].forEach((a,i)=>btn(['▲','◆','●','■'][i]+'  '+a,()=>set(ref(realtime,'quizRooms/'+room+'/players/'+uid+'/answers/'+v.round),i),answers));else body.append('답안 제출 완료');
- if(uid===v.host)btn('다음 문제 / 결과',()=>update(base,{round:v.round+1}));
- },err=>body.textContent=err.message);
- quizClose=()=>{off();remove(own).catch(()=>{});onDisconnect(own).cancel().catch(()=>{})};
+ const base=ref(realtime,'quizRooms/'+room),own=ref(realtime,'quizRooms/'+room+'/players/'+uid);
+ const player={name,equip:{...heroes[hero].look,...equip},hero,hp:heroes[hero].hp,score:0};
+ const joined=await runTransaction(base,v=>{if(mode==='create'){if(v)return;return {host:uid,round:-1,players:{[uid]:player}}}if(!v||v.round!==-1)return;const ps=v.players||{};if(ps[uid]||Object.keys(ps).length>=3||Object.values(ps).some(p=>p.hero===hero))return;v.players={...ps,[uid]:player};return v},{applyLocally:false});
+ if(!joined.committed)throw Error('방이 없거나 가득 찼거나 캐릭터가 이미 선택되었습니다.');
+ await onDisconnect(own).remove();pick.hidden=true;go.hidden=true;root.querySelector('#qn').hidden=true;root.querySelector('#qr').hidden=true;
+ let current=null,busy=false,offset=0;const now=()=>Date.now()+offset;const offTime=onValue(ref(realtime,'.info/serverTimeOffset'),s=>offset=s.val()||0);
+ const tx=async fn=>{if(busy)return;busy=true;try{await runTransaction(base,fn,{applyLocally:false})}finally{busy=false}};
+ function advance(){return tx(v=>{if(!v||v.host!==uid||v.finished||v.round<0)return;const alive=Object.values(v.players||{}).filter(p=>p.hp>0);if(now()<v.deadline&&!alive.every(p=>p.answers?.[v.round]!==undefined))return;quizResolve(v,quizQuestions[v.round][2]);v.deadline=now()+15000;return v})}
+ function render(v){if(!body.isConnected)return;body.replaceChildren();if(!v){body.textContent='방 종료';return}const title=document.createElement('h3');title.className='quizcode';title.textContent=room+' · '+Object.keys(v.players||{}).length+'/3';body.append(title);
+ const list=document.createElement('div');list.className='quizslots survivalSlots';const people=Object.values(v.players||{});for(let i=0;i<3;i++){const p=people[i],slot=document.createElement('div');slot.className='quizslot';if(p){const avatar=document.createElement('i');avatar.innerHTML=window.quizAvatarMarkup(p.equip||{});slot.append(avatar,document.createTextNode(p.name+' · '+heroes[p.hero].name));const hp=document.createElement('div');hp.className='survivalHP';const fill=document.createElement('span');fill.style.width=(p.hp/heroes[p.hero].hp*100)+'%';hp.append(fill);slot.append(hp,document.createTextNode(p.hp>0?'HP '+p.hp+'/'+heroes[p.hero].hp:'KO'));if(p.hp<=0)slot.classList.add('knocked');if(p.answers?.[v.round]!==undefined)slot.classList.add('quizanswered')}else slot.textContent='참가 대기';list.append(slot)}body.append(list);
+ function btn(label,fn,target=body){const b=document.createElement('button');b.textContent=label;b.onclick=async()=>{b.disabled=true;try{await fn()}catch(e){alert(e.message)}finally{b.disabled=false}};target.append(b);return b}
+ if(v.round===-1){if(uid===v.host&&people.length>=2)btn('게임 시작',()=>tx(s=>{if(!s||s.host!==uid||s.round!==-1||Object.keys(s.players||{}).length<2)return;s.round=0;s.started=now();s.deadline=now()+15000;return s}));else body.append('2~3명 참가 대기');return}
+ if(v.finished){const scores=people.slice().sort((a,b)=>b.hp-a.hp||b.score-a.score);scores.forEach((p,i)=>{const row=document.createElement('p');row.className='quizrank';row.textContent=(i+1)+'위 '+p.name+' · HP '+p.hp+' · 정답 '+p.score;body.append(row)});return}
+ const clock=document.createElement('h3');clock.id='survivalClock';body.append(clock);const q=quizQuestions[v.round],h=document.createElement('h3');h.textContent=(v.round+1)+'. '+q[0];body.append(h);const answers=document.createElement('div');answers.className='quizanswers';body.append(answers);const me=v.players?.[uid];
+ if(me?.hp>0&&me.answers?.[v.round]===undefined)q[1].forEach((a,i)=>btn(['▲','◆','●','■'][i]+' '+a,()=>tx(s=>{const p=s?.players?.[uid];if(!p||s.finished||s.round!==v.round||p.hp<=0||now()>=s.deadline||p.answers?.[s.round]!==undefined)return;p.answers={...p.answers,[s.round]:i};return s}),answers));else body.append(me?.hp>0?'답안 제출 완료':'KO · 관전 중');
+ if(me?.hp>0){const skill=btn(heroes[me.hero].skill,()=>tx(s=>{const p=s?.players?.[uid];if(!p||s.finished||s.round<0||p.hp<=0||now()-(p.lastSkill||s.started)<30000)return;const h=heroes[p.hero];p.lastSkill=now();if(h.power<0)p.hp=Math.min(h.hp,p.hp-h.power);else for(const [id,a] of Object.entries(s.players))if(id!==uid)a.hp=Math.max(0,a.hp-h.power);if(Object.values(s.players).filter(a=>a.hp>0).length<=1)s.finished=true;return s}));skill.id='survivalSkill'}
+ }
+ const off=onValue(base,s=>{current=s.val();render(current)},err=>body.textContent=err.message);
+ const timer=setInterval(()=>{if(!current||current.round<0||current.finished)return;const clock=body.querySelector('#survivalClock');if(clock)clock.textContent=Math.max(0,Math.ceil((current.deadline-now())/1000))+'초';const p=current.players?.[uid],skill=body.querySelector('#survivalSkill');if(skill&&p){const left=Math.max(0,Math.ceil((30000-now()+(p.lastSkill||current.started))/1000));skill.disabled=left>0;skill.textContent=heroes[p.hero].skill+(left?' · '+left+'초':' · 사용 가능')}if(current.host===uid&&(now()>=current.deadline||Object.values(current.players||{}).filter(p=>p.hp>0).every(p=>p.answers?.[current.round]!==undefined)))advance().catch(e=>{body.textContent=e.message})},250);
+ quizClose=()=>{clearInterval(timer);off();offTime();remove(own).then(()=>onDisconnect(own).cancel()).catch(()=>{})};
  }catch(e){body.textContent='연결 실패: '+e.message;go.disabled=false}};
 }
 const beforeQuiz=renderPage;renderPage=function(p){if(quizClose){quizClose();quizClose=null}beforeQuiz(p);if(p==='create'||p==='join')quizUI(p)};
