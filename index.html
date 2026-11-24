@@ -20,10 +20,42 @@ import {initializeApp} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase
 import {getAuth,signInWithEmailAndPassword,onAuthStateChanged,signOut,signInAnonymously} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
 import {getFirestore,doc,getDoc} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 const app=initializeApp({apiKey:"AIzaSyBXAj7g8feZtHqRHKkfe---NQZ3Rp32Gbk",authDomain:"quiz-battle-f73a2.firebaseapp.com",projectId:"quiz-battle-f73a2",appId:"1:563864469409:web:39f01d547d14632c2c55e0"});
-import {getDatabase,ref,set,onValue,onDisconnect,serverTimestamp,remove} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js';
+import {getDatabase,ref,set,onValue,onDisconnect,serverTimestamp,remove,runTransaction,get,update} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js';
 const auth=getAuth(app),db=getFirestore(app);
 const realtime=getDatabase(app,'https://quiz-battle-f73a2-default-rtdb.asia-southeast1.firebasedatabase.app');
 window.fightNet={async join(room,slot,receive){await auth.authStateReady();const u=auth.currentUser|| (await signInAnonymously(auth)).user;const own=ref(realtime,'fightRooms/'+room+'/players/'+slot);const send=(x,y,action)=>set(own,{uid:u.uid,x,y,action,updatedAt:serverTimestamp()});await send(slot==='p1'?280:680,0,'idle');await onDisconnect(own).remove();const off=onValue(ref(realtime,'fightRooms/'+room+'/players'),snap=>receive(snap.val()||{}));return {send,async close(){off();await remove(own);await onDisconnect(own).cancel()}}}};
+
+
+// Casual multiplayer: host controls rounds; no ranked rewards.
+let quizClose=null;
+const quizQuestions=qs;
+function quizUI(mode){
+ if(quizClose){quizClose();quizClose=null}
+ const root=panel;root.innerHTML='<button data-back="1">← 이전 화면</button><h2>실시간 퀴즈 배틀</h2><input id="qn" maxlength="16" placeholder="닉네임"><input id="qr" maxlength="6" placeholder="방 코드"><button id="qgo">'+(mode==='create'?'방 생성':'참가')+'</button><div id="qbody"></div>';
+ const body=root.querySelector('#qbody'),go=root.querySelector('#qgo');
+ go.onclick=async()=>{go.disabled=true;try{
+ await auth.authStateReady();const uid=(auth.currentUser||(await signInAnonymously(auth)).user).uid;
+ const name=root.querySelector('#qn').value.trim()||'플레이어';
+ const room=mode==='create'?Array.from(crypto.getRandomValues(new Uint8Array(6)),v=>'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[v%32]).join(''):root.querySelector('#qr').value.trim().toUpperCase();
+ if(!/^[A-Z0-9]{6}$/.test(room))throw Error('방 코드 6자 입력');
+ const base=ref(realtime,'quizRooms/'+room), own=ref(realtime,'quizRooms/'+room+'/players/'+uid);
+ if(mode==='create')await set(base,{host:uid,round:-1,players:{[uid]:{name}}});
+ else {const snap=await get(base);if(!snap.exists()||snap.val().round!==-1)throw Error('참가 가능한 방이 아닙니다');await set(own,{name});}
+ await onDisconnect(own).remove();
+ let current=null;
+ const off=onValue(base,snap=>{if(!body.isConnected)return;const v=snap.val();if(!v){body.textContent='방 종료';return}current=v;body.replaceChildren();const title=document.createElement('h3');title.textContent='방 코드 '+room+' · '+Object.keys(v.players||{}).length+'/10';body.append(title);
+ const list=document.createElement('p');list.textContent=Object.values(v.players||{}).map(p=>p.name).join(' / ');body.append(list);
+ function btn(label,fn){const b=document.createElement('button');b.textContent=label;b.onclick=async()=>{b.disabled=true;try{await fn()}catch(e){b.disabled=false;alert(e.message)}};body.append(b)}
+ if(v.round===-1){if(uid===v.host)btn('게임 시작',()=>update(base,{round:0}));return}
+ if(v.round>=quizQuestions.length){const scores=Object.entries(v.players||{}).map(([id,p])=>({name:p.name,score:quizQuestions.reduce((n,q,i)=>n+(p.answers?.[i]===q[2]?1:0),0)})).sort((a,b)=>b.score-a.score);scores.forEach((p,i)=>{const row=document.createElement('p');row.textContent=(i+1)+'위 '+p.name+' · '+p.score+'점';body.append(row)});return}
+ const q=quizQuestions[v.round],h=document.createElement('h3');h.textContent=(v.round+1)+'. '+q[0];body.append(h);
+ if(v.players?.[uid]?.answers?.[v.round]===undefined)q[1].forEach((a,i)=>btn(a,()=>set(ref(realtime,'quizRooms/'+room+'/players/'+uid+'/answers/'+v.round),i)));else body.append('답안 제출 완료');
+ if(uid===v.host)btn('다음 문제 / 결과',()=>update(base,{round:v.round+1}));
+ },err=>body.textContent=err.message);
+ quizClose=()=>{off();remove(own).catch(()=>{});onDisconnect(own).cancel().catch(()=>{})};
+ }catch(e){body.textContent='연결 실패: '+e.message;go.disabled=false}};
+}
+const beforeQuiz=renderPage;renderPage=function(p){if(quizClose){quizClose();quizClose=null}beforeQuiz(p);if(p==='create'||p==='join')quizUI(p)};
 
 const b=document.createElement('button');b.textContent='관리자 로그인';b.style.cssText='background:#263c65;padding:10px;width:100%;margin-top:12px';lobby.append(b);
 let admin=false;
